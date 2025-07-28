@@ -1,16 +1,12 @@
-use async_graphql::{MergedObject, Object};
+use async_graphql::{ EmptySubscription, Schema};
+use sea_orm::DatabaseConnection;
 
-use super::user::UserQuery;
+use crate::graphql::{mutation::MutationRoot, query::QueryRoot};
 
-#[derive(MergedObject, Default)]
-pub struct QueryRoot(UserQuery);
+pub type AppSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
-#[derive(Default)]
-pub struct MutationRoot;
-
-#[Object]
-impl MutationRoot {
-    async fn ping(&self) -> &str {
-        "pong"
-    }
+pub fn create_schema(db: DatabaseConnection) -> AppSchema {
+    Schema::build(QueryRoot, MutationRoot, EmptySubscription)
+        .data(db)
+        .finish()
 }

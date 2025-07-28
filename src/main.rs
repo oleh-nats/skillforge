@@ -1,58 +1,46 @@
-use axum::{routing::get, Router, response::Html};
-use async_graphql::Schema;
-use async_graphql_axum::GraphQL;
-use std::net::SocketAddr;
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use axum::{
+    extract::State, response::{Html, IntoResponse}, routing::{get, post}, Router
+};
+use async_graphql::{http::GraphQLPlaygroundConfig, EmptySubscription, Schema};
+use graphql::schema::create_schema;
+use tokio::net::TcpListener;
+use std::{net::SocketAddr, sync::Arc};
+use async_graphql::http::playground_source;
+
+use crate::graphql::{mutation::MutationRoot, query::QueryRoot};
 
 mod db;
 mod graphql;
 mod entities;
 mod services;
 
-#[tokio::main]
-async fn main() {
-    let db = db::init().await.expect("DB connection failed");
-
-    let schema = Schema::build(
-        graphql::schema::QueryRoot,
-        graphql::schema::MutationRoot,
-        async_graphql::EmptySubscription,
-    )
-    .data(db)
-    .finish();
-
-    let app = Router::new()
-        .route("/", get(playground))
-        .route("/graphql", GraphQL::new(schema));
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("🚀 Running at http://{}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+async fn graphql_playground() -> impl IntoResponse {
+    Html(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
 }
 
-async fn playground() -> Html<&'static str> {
-    Html(r#"
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8"/>
-            <title>GraphQL Playground</title>
-            <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/graphql-playground-react@1.7.42/build/static/css/index.css" />
-            <link rel="shortcut icon" href="//cdn.jsdelivr.net/npm/graphql-playground-react@1.7.42/build/favicon.png" />
-            <script src="//cdn.jsdelivr.net/npm/graphql-playground-react@1.7.42/build/static/js/middleware.js"></script>
-        </head>
-        <body>
-            <div id="root"/>
-            <script>
-                window.addEventListener('load', function () {
-                    GraphQLPlayground.init(document.getElementById('root'), {
-                        endpoint: '/graphql'
-                    })
-                })
-            </script>
-        </body>
-        </html>
-    "#)
+async fn graphql_handler(
+    State(schema): State<Arc<Schema<QueryRoot, MutationRoot, EmptySubscription>>>,
+    req: GraphQLRequest,
+) -> GraphQLResponse {
+    schema.execute(req.into_inner()).await.into()
+}
+
+#[tokio::main]
+async fn main() {
+    dotenvy::dotenv().expect("Failed to read .env file");
+    let db = db::init().await.expect("DB connection failed");
+
+    let schema = create_schema(db);
+    let app = Router::new()
+        .route("/", get(graphql_playground))
+        .route("/graphql", post(graphql_handler))
+        .with_state(schema.into());
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let listener = TcpListener::bind(addr).await.unwrap();
+    println!("🚀 Running at http://{}", addr);
+    axum::serve(listener, app)
+        .await
+        .unwrap();
 }
